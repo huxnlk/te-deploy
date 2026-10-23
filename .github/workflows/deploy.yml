@@ -1,0 +1,158 @@
+name: deploy
+
+# Phone-approved production deploys for TE apps. This repo is public on
+# purpose: GitHub only offers the "required reviewer" gate on public repos
+# for this account's plan. It holds no app code and no secrets in files.
+#
+# 1. Someone (usually Claude) starts this workflow with an app and a full
+#    40-character sha from that app's private repo.
+# 2. `check` (no secrets) only checks the input shape.
+# 3. `deploy` uses the environment named after the app. GitHub holds it until
+#    Robbie taps Approve in the GitHub mobile app. Only then does the job get
+#    that environment's key, host and port.
+# 4. Box B pins the key to the app's forced-command wrapper. The wrapper
+#    refuses a sha that is not on the private repo's main.
+# 5. Logs are public, so the job prints only step names and PASS or FAIL,
+#    never the Box B log itself.
+#
+# Design: huxnlk/ai-ops-2026 11-remote-execution/PHONE-APPROVED-DEPLOYS-2026-10-23.md
+# No third-party actions.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "App to deploy"
+        type: choice
+        options: [odoo-mcp]
+      action:
+        description: "deploy or rollback"
+        type: choice
+        options: [deploy, rollback]
+        default: deploy
+      sha:
+        description: "Full 40-character commit on the app's main (ignored for rollback)"
+        type: string
+        required: false
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: deploy-${{ inputs.app }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: github.ref == 'refs/heads/main'
+    outputs:
+      target: ${{ steps.shape.outputs.target }}
+    steps:
+      - id: shape
+        env:
+          APP: ${{ inputs.app }}
+          ACTION: ${{ inputs.action }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$ACTION" = "rollback" ]; then
+            echo "target=rollback" >> "$GITHUB_OUTPUT"
+            printf '## Roll back %s\n\nApproving puts the previous image back live.\n' "$APP" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::sha must be the full 40-character lowercase commit"; exit 1
+          fi
+          echo "target=$SHA" >> "$GITHUB_OUTPUT"
+          printf '## Deploy %s `%s`\n\nApproving runs the gated pipeline on Box B. Box B refuses the sha unless it is on main.\n' "$APP" "$SHA" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    environment: ${{ inputs.app }}
+    steps:
+      - name: Load the deploy key
+        env:
+          KEY: ${{ secrets.BOXB_DEPLOY_KEY }}
+          KNOWN: ${{ vars.BOXB_KNOWN_HOSTS }}
+          HOST: ${{ vars.BOXB_HOST }}
+          PORT: ${{ vars.BOXB_PORT }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEY" ] || [ -z "$KNOWN" ] || [ -z "$HOST" ] || [ -z "$PORT" ]; then
+            echo "::error::environment is missing BOXB_DEPLOY_KEY, BOXB_KNOWN_HOSTS, BOXB_HOST or BOXB_PORT"; exit 1
+          fi
+          echo "::add-mask::$HOST"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+
+      - name: Start and follow the run on Box B
+        env:
+          TARGET: ${{ needs.check.outputs.target }}
+          HOST: ${{ vars.BOXB_HOST }}
+          PORT: ${{ vars.BOXB_PORT }}
+        run: |
+          set -euo pipefail
+          box() {
+            ssh -q -i ~/.ssh/deploy_key -p "$PORT" -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes \
+              -o ServerAliveInterval=30 "root@$HOST" "$@"
+          }
+          start=$(box "$TARGET") || { echo "::error::Box B refused or could not be reached"; exit 1; }
+          run_id=$(printf '%s\n' "$start" | sed -n 's/^run_id: //p')
+          [ -n "$run_id" ] || { echo "::error::Box B did not return a run_id"; exit 1; }
+          echo "Box B run: $run_id"
+
+          # golden_smoke alone takes about 20 minutes; a full sync can add an hour.
+          deadline=$(( $(date +%s) + 90 * 60 ))
+          last=""
+          while :; do
+            sleep 30
+            if ! out=$(box status "$run_id"); then
+              [ "$(date +%s)" -lt "$deadline" ] && continue
+              echo "::error::lost contact with Box B"; exit 1
+            fi
+            # Step names only. The Box B log can hold business figures and must
+            # not reach these public logs.
+            step=$(printf '%s\n' "$out" | sed -n 's/^\[[0-9:]*\] == \([a-z-]*\) ==$/\1/p' | tail -n 1)
+            if [ -n "$step" ] && [ "$step" != "$last" ]; then echo "step: $step"; last=$step; fi
+            if printf '%s\n' "$out" | grep -q '^running: false$'; then break; fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::run $run_id still running after 90 minutes"; exit 1
+            fi
+          done
+
+          table=$(printf '%s\n' "$out" | sed -n '/^== deploy summary ==$/,$p' \
+            | awk 'NR>1 && $1!="RESULT:" && ($2=="PASS"||$2=="FAIL"||$2=="SKIP") {print $1, $2}')
+          result=$(printf '%s\n' "$out" | sed -n 's/^RESULT: \([A-Z]*\).*/\1/p' | tail -n 1)
+          printf '%s\n' "$table"
+          {
+            echo "## Box B run \`$run_id\`: ${result:-unknown}"
+            echo
+            echo '```'
+            printf '%s\n' "$table"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [ "$result" = "PASS" ] || { echo "::error::pipeline did not pass; read $run_id on Box B"; exit 1; }
+          if [ "$TARGET" != "rollback" ]; then
+            deployed=$(printf '%s\n' "$out" | sed -n 's/^deployed_sha: //p')
+            [ "$deployed" = "$TARGET" ] || { echo "::error::.deployed-sha does not match the requested sha"; exit 1; }
+          fi
+
+      - name: Check health from outside
+        env:
+          HEALTH_URL: ${{ vars.HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "$HEALTH_URL" ]; then echo "no HEALTH_URL set, skipped"; exit 0; fi
+          curl -fsS --max-time 20 -o /dev/null "$HEALTH_URL" && echo "health ok"
+
+      - name: Remove the key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
