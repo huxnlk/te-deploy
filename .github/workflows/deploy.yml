@@ -24,7 +24,7 @@ on:
       app:
         description: "App to deploy"
         type: choice
-        options: [odoo-mcp]
+        options: [odoo-mcp, mission-control]
       action:
         description: "deploy or rollback"
         type: choice
@@ -76,9 +76,11 @@ jobs:
     steps:
       - name: Load the deploy key
         env:
+          # Host and host key are secrets so the public log masks them. The vars
+          # fallback covers an environment set up before 23 Oct 12:00Z.
           KEY: ${{ secrets.BOXB_DEPLOY_KEY }}
-          KNOWN: ${{ vars.BOXB_KNOWN_HOSTS }}
-          HOST: ${{ vars.BOXB_HOST }}
+          KNOWN: ${{ secrets.BOXB_KNOWN_HOSTS || vars.BOXB_KNOWN_HOSTS }}
+          HOST: ${{ secrets.BOXB_HOST || vars.BOXB_HOST }}
           PORT: ${{ vars.BOXB_PORT }}
         run: |
           set -euo pipefail
@@ -94,7 +96,7 @@ jobs:
       - name: Start and follow the run on Box B
         env:
           TARGET: ${{ needs.check.outputs.target }}
-          HOST: ${{ vars.BOXB_HOST }}
+          HOST: ${{ secrets.BOXB_HOST || vars.BOXB_HOST }}
           PORT: ${{ vars.BOXB_PORT }}
         run: |
           set -euo pipefail
