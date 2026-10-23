@@ -1,4 +1,5 @@
 name: deploy
+run-name: ${{ inputs.action }} ${{ inputs.app }} ${{ inputs.sha }}
 
 # Phone-approved production deploys for TE apps. This repo is public on
 # purpose: GitHub only offers the "required reviewer" gate on public repos
