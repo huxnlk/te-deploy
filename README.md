@@ -4,8 +4,9 @@ Phone-approved production deploys for TE apps. Public on purpose: on this accoun
 the "required reviewer" approval gate only works on public repos.
 
 1. There is no app code here and no secret in any file.
-2. Each app has its own environment (`odoo-mcp` first). It requires Robbie's approval and only
-   runs from `main`. Its deploy key, host and port live in that environment.
+2. Each app has its own environment: `odoo-mcp` and `mission-control`. It requires Robbie's
+   approval and only runs from `main`. Its deploy key, host and port live in that environment,
+   and each app's key works only for that app.
 3. The key on the target can only start a deploy of one commit, start a rollback, or read a
    run's status. The target refuses any commit that isn't on the app's private `main`.
 4. Logs show step names and PASS or FAIL only.
