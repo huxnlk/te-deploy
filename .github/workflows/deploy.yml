@@ -25,7 +25,7 @@ on:
       app:
         description: "App to deploy"
         type: choice
-        options: [odoo-mcp, mission-control]
+        options: [odoo-mcp, mission-control, aatuti-infra-mcp]
       action:
         description: "deploy or rollback"
         type: choice
