@@ -163,6 +163,9 @@ jobs:
             if [ "$TARGET" = "reap-dry" ]; then want='"mode": "DRY_RUN"'; else want='"mode": "EXECUTE"'; fi
             printf '%s\n' "$counts" | grep -q "$want" || { echo "::error::reap output did not show $want; read $run_id on Box B"; exit 1; }
             printf '%s\n' "$counts" | grep -q '"fetch_consistent": true' || { echo "::error::reap did not confirm a consistent fetch"; exit 1; }
+            if [ "$TARGET" = "reap" ]; then
+              printf '%s\n' "$counts" | grep -q '"actually_deleted":' || { echo "::error::reap output has no actually_deleted count; read $run_id on Box B"; exit 1; }
+            fi
             exit 0
           fi
           table=$(printf '%s\n' "$out" | sed -n '/^== deploy summary ==$/,$p' \
