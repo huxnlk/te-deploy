@@ -11,6 +11,11 @@ the "required reviewer" approval gate only works on public repos.
 3. The key on the target can only start a deploy of one commit, start a rollback, or read a
    run's status. The target refuses any commit that isn't on the app's private `main`.
 4. Logs show step names and PASS or FAIL only.
+5. `odoo-mcp` only: the actions `reap-dry-run` and `reap-execute` run the reporting-cache orphan
+   reap for `stock_quants` through the same forced-command key (fixed command, no input). The dry
+   run counts orphans and deletes nothing. The execute run deletes cache rows only, never Odoo, and
+   its own guards fail closed. The log shows counts and a verdict, never ids. Each execute run needs
+   Robbie's own chat message naming it.
 
 Design and setup: huxnlk/ai-ops-2026 `11-remote-execution/PHONE-APPROVED-DEPLOYS-2026-10-23.md`
 (private). Changes to this repo go through a pull request.

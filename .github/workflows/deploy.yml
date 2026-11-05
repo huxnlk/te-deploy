@@ -27,9 +27,9 @@ on:
         type: choice
         options: [odoo-mcp, mission-control, aatuti-infra-mcp]
       action:
-        description: "deploy or rollback"
+        description: "deploy, rollback, or (odoo-mcp only) reap-dry-run / reap-execute"
         type: choice
-        options: [deploy, rollback]
+        options: [deploy, rollback, reap-dry-run, reap-execute]
         default: deploy
       sha:
         description: "Full 40-character commit on the app's main (ignored for rollback)"
@@ -58,6 +58,21 @@ jobs:
           SHA: ${{ inputs.sha }}
         run: |
           set -euo pipefail
+          if [ "$ACTION" = "reap-dry-run" ] || [ "$ACTION" = "reap-execute" ]; then
+            # Reporting-cache orphan reap for stock_quants. odoo-mcp only; the
+            # target wrapper runs a fixed command and takes no other input.
+            if [ "$APP" != "odoo-mcp" ]; then
+              echo "::error::reap actions exist for odoo-mcp only"; exit 1
+            fi
+            if [ "$ACTION" = "reap-dry-run" ]; then T=reap-dry; else T=reap; fi
+            echo "target=$T" >> "$GITHUB_OUTPUT"
+            if [ "$T" = "reap-dry" ]; then
+              printf '## Reap dry run, %s\n\nCounts orphan stock_quants rows in the reporting cache. Deletes nothing.\n' "$APP" >> "$GITHUB_STEP_SUMMARY"
+            else
+              printf '## Reap, %s\n\nDeletes orphan stock_quants rows from the reporting cache only, never Odoo. The reap guards fail closed.\n' "$APP" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit 0
+          fi
           if [ "$ACTION" = "rollback" ]; then
             echo "target=rollback" >> "$GITHUB_OUTPUT"
             printf '## Roll back %s\n\nApproving puts the previous image back live.\n' "$APP" >> "$GITHUB_STEP_SUMMARY"
@@ -130,6 +145,26 @@ jobs:
             fi
           done
 
+          if [ "$TARGET" = "reap-dry" ] || [ "$TARGET" = "reap" ]; then
+            # Counts and verdict only. The Box B log can hold ids; sample lists
+            # and everything not named here stay out of these public logs.
+            counts=$(printf '%s\n' "$out" | grep -E '^ *"(mode|cache_rows|live_rows|fetch_consistent|deleted_true_orphans|out_of_scope_still_in_odoo|would_delete|delete_fraction|actually_deleted|skus_checked|skus_agreeing|skus_failing|pct|REFUSED)":' | sed 's/^ *//' || true)
+            printf '%s\n' "$counts"
+            {
+              echo "## Box B reap run \`$run_id\`"
+              echo
+              echo '```'
+              printf '%s\n' "$counts"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            if printf '%s\n' "$counts" | grep -q '"REFUSED"'; then
+              echo "::error::the reap refused (its guards failed closed, nothing deleted)"; exit 1
+            fi
+            if [ "$TARGET" = "reap-dry" ]; then want='"mode": "DRY_RUN"'; else want='"mode": "EXECUTE"'; fi
+            printf '%s\n' "$counts" | grep -q "$want" || { echo "::error::reap output did not show $want; read $run_id on Box B"; exit 1; }
+            printf '%s\n' "$counts" | grep -q '"fetch_consistent": true' || { echo "::error::reap did not confirm a consistent fetch"; exit 1; }
+            exit 0
+          fi
           table=$(printf '%s\n' "$out" | sed -n '/^== deploy summary ==$/,$p' \
             | awk 'NR>1 && $1!="RESULT:" && ($2=="PASS"||$2=="FAIL"||$2=="SKIP") {print $1, $2}')
           result=$(printf '%s\n' "$out" | sed -n 's/^RESULT: \([A-Z]*\).*/\1/p' | tail -n 1)
