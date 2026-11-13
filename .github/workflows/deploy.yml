@@ -25,7 +25,7 @@ on:
       app:
         description: "App to deploy"
         type: choice
-        options: [odoo-mcp, mission-control, aatuti-infra-mcp, tackle-tracker]
+        options: [odoo-mcp, mission-control, aatuti-infra-mcp, tackle-tracker, aatuti-nms]
       action:
         description: "deploy, rollback, or (odoo-mcp only) reap-dry-run / reap-execute"
         type: choice
