@@ -4,7 +4,7 @@ Phone-approved production deploys for TE apps. Public on purpose: on this accoun
 the "required reviewer" approval gate only works on public repos.
 
 1. There is no app code here and no secret in any file.
-2. Each app has its own environment: `odoo-mcp`, `mission-control` and `aatuti-infra-mcp`. It has
+2. Each app has its own environment: `odoo-mcp`, `mission-control`, `aatuti-infra-mcp`, `tackle-tracker`, `aatuti-nms` and `aatuti-admin-mcp`. It has
    no required reviewer (a thread dispatches a deploy only on Robbie's own chat message) and only
    runs from `main`. Its deploy key, host and port live in that environment,
    and each app's key works only for that app.
